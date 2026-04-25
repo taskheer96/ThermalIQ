@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThermalIQ | Urban Heat Island Analysis Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root {
+            --bg: #030712; --panel: rgba(17, 24, 39, 0.8); --text: #f3f4f6; --muted: #9ca3af;
+            --border: rgba(75, 85, 99, 0.4); --map-filter: invert(1) hue-rotate(180deg) brightness(0.8);
+            --card-bg: rgba(31, 41, 55, 0.6);
+        }
+        [data-theme="light"] {
+            --bg: #f8f5f0; --panel: rgba(255, 255, 255, 0.9); --text: #111827; --muted: #4b5563;
+            --border: rgba(209, 213, 219, 1); --map-filter: none;
+            --card-bg: rgba(243, 244, 246, 1);
+        }
+        body { background-color: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; transition: all 0.5s ease; cursor: default; }
+        .glass-panel { background: var(--panel); backdrop-filter: blur(12px); border: 1px solid var(--border); transition: all 0.5s ease; }
+        
+        /* Custom Cursors */
+        .cursor-action { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><text y="15" font-size="15">👆</text></svg>'), pointer; }
+        .cursor-search { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><text y="15" font-size="15">🔍</text></svg>'), pointer; }
+        #map { height: 450px; border-radius: 2.5rem; filter: var(--map-filter); cursor: grab; transition: filter 0.5s ease; }
+        #map:active { cursor: grabbing; }
+        canvas { cursor: crosshair; }
+
+        .theme-btn { width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--panel); border: 1px solid var(--border); transition: transform 0.3s; }
+        .theme-btn:hover { transform: rotate(20deg) scale(1.1); }
+        
+        .research-card { background: var(--card-bg); border: 1px solid var(--border); transition: transform 0.3s ease, box-shadow 0.3s ease; }
+        .research-card:hover { transform: translateY(-5px); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); }
+
+        @keyframes shimmer { 100% { transform: translateX(100%); } }
+    </style>
+</head>
+<body data-theme="dark">
+
+    <div class="fixed top-6 right-6 z-[2000] flex items-center gap-3">
+        <button id="themeToggle" class="theme-btn shadow-2xl cursor-action"><span id="modeIcon">🌙</span></button>
+        <a href="books.html" target="_blank" class="cursor-search group relative bg-green-700 px-5 py-3 rounded-2xl text-white font-bold flex items-center gap-2 overflow-hidden shadow-xl">
+            <div class="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent group-hover:animate-[shimmer_1.5s_infinite]"></div>
+            <span>📚 Book Suggestions</span>
+        </a>
+    </div>
+
+    <nav class="p-10 absolute top-0 w-full flex items-center gap-3">
+        <div class="w-3 h-3 rounded-full bg-orange-600 animate-pulse"></div>
+        <span class="font-black text-2xl tracking-widest uppercase">Thermal<span class="text-orange-600">IQ</span></span>
+    </nav>
+
+    <section class="pt-44 pb-20 px-6 text-center">
+        <h1 class="text-6xl font-black mb-4 tracking-tighter">The Urban <span class="text-orange-600">Anomaly</span></h1>
+        <p class="text-muted mb-12 max-w-xl mx-auto font-medium">Compare Urban vs Rural temperatures using live satellite telemetry.</p>
+        
+        <div class="glass-panel max-w-5xl mx-auto p-10 rounded-[2.5rem] shadow-2xl">
+            <form id="compareForm" class="flex flex-col md:flex-row gap-6">
+                <div class="relative flex-1 text-left">
+                    <label class="text-[10px] font-bold uppercase tracking-widest mb-3 block ml-2 text-muted">Urban Core (City)</label>
+                    <input type="text" id="uIn" placeholder="Search City..." class="w-full bg-gray-500/10 border border-gray-400/20 py-4 px-6 rounded-2xl focus:outline-none focus:ring-2 focus:ring-orange-600 transition-all">
+                    <ul id="uDrop" class="absolute z-[2100] w-full glass-panel rounded-2xl mt-2 hidden max-h-48 overflow-y-auto cursor-search"></ul>
+                </div>
+                <div class="relative flex-1 text-left">
+                    <label class="text-[10px] font-bold uppercase tracking-widest mb-3 block ml-2 text-muted">Rural Area (Greenery)</label>
+                    <input type="text" id="rIn" placeholder="Search Village..." class="w-full bg-gray-500/10 border border-gray-400/20 py-4 px-6 rounded-2xl focus:outline-none focus:ring-2 focus:ring-green-600 transition-all">
+                    <ul id="rDrop" class="absolute z-[2100] w-full glass-panel rounded-2xl mt-2 hidden max-h-48 overflow-y-auto cursor-search"></ul>
+                </div>
+                <button type="submit" id="analyzeBtn" class="bg-orange-600 text-white font-black px-12 rounded-2xl hover:scale-105 transition-transform cursor-action py-4 md:py-0">ANALYZE</button>
+            </form>
+        </div>
+    </section>
+
+    <section id="dash" class="hidden max-w-7xl mx-auto px-6 pb-12 space-y-8">
+        <div class="glass-panel p-10 rounded-[2.5rem] border-l-[12px] border-orange-600 shadow-2xl">
+            <div id="status-emoji" class="text-6xl mb-4"></div>
+            <div id="summary-text" class="text-4xl font-light leading-tight"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="glass-panel p-8 rounded-3xl text-center"><p class="text-xs text-muted uppercase font-bold mb-2">Urban Average (7-Day)</p><h2 id="uAvg" class="text-5xl font-black text-orange-600">--</h2></div>
+            <div class="glass-panel p-8 rounded-3xl text-center"><p class="text-xs text-muted uppercase font-bold mb-2">Rural Average (7-Day)</p><h2 id="rAvg" class="text-5xl font-black text-green-600">--</h2></div>
+            <div class="glass-panel p-8 rounded-3xl text-center"><p class="text-xs text-muted uppercase font-bold mb-2">Mean Heat Delta</p><h2 id="hDelta" class="text-5xl font-black text-red-600">--</h2></div>
+        </div>
+
+        <div class="glass-panel p-4 rounded-[3.5rem] shadow-inner"><div id="map"></div></div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div class="glass-panel p-8 rounded-[2rem] h-[400px]"><h3 class="text-xs font-bold text-muted uppercase mb-4 tracking-widest">7-Day Temperature Trend</h3><canvas id="cLine"></canvas></div>
+            <div class="glass-panel p-8 rounded-[2rem] h-[400px]"><h3 class="text-xs font-bold text-muted uppercase mb-4 tracking-widest">24-Hour Diurnal Profile (Night Cycle)</h3><canvas id="cHour"></canvas></div>
+            <div class="glass-panel p-8 rounded-[2rem] h-[400px]"><h3 class="text-xs font-bold text-muted uppercase mb-4 tracking-widest">Daily Heat Penalty (Gap)</h3><canvas id="cPenalty"></canvas></div>
+            <div class="glass-panel p-8 rounded-[2rem] h-[400px]"><h3 class="text-xs font-bold text-muted uppercase mb-4 tracking-widest">Mean Comparison Bar</h3><canvas id="cBar"></canvas></div>
+        </div>
+    </section>
+
+    <section class="max-w-7xl mx-auto px-6 mb-24">
+        <h2 class="text-3xl font-black mb-8 text-center uppercase tracking-widest">Global Research & Live Telemetry</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            
+            <div class="research-card p-8 rounded-[2rem] flex flex-col cursor-search">
+                <div class="text-4xl mb-4">🌍</div>
+                <h3 class="font-bold text-lg mb-2">Live Earth Map</h3>
+                <p class="text-xs text-muted mb-6 flex-grow">Real-time global surface temperatures and wind patterns.</p>
+                <a href="https://earth.nullschool.net/#current/wind/surface/level/overlay=temp" target="_blank" class="text-orange-500 font-bold text-sm hover:underline">Launch Map &rarr;</a>
+            </div>
+
+            <div class="research-card p-8 rounded-[2rem] flex flex-col cursor-search">
+                <div class="text-4xl mb-4">🛰️</div>
+                <h3 class="font-bold text-lg mb-2">NASA Earth Obs</h3>
+                <p class="text-xs text-muted mb-6 flex-grow">Satellite data on solar radiation and asphalt absorption.</p>
+                <a href="https://earthobservatory.nasa.gov/features/UrbanHeat" target="_blank" class="text-orange-500 font-bold text-sm hover:underline">Read Science &rarr;</a>
+            </div>
+
+            <div class="research-card p-8 rounded-[2rem] flex flex-col cursor-search">
+                <div class="text-4xl mb-4">📊</div>
+                <h3 class="font-bold text-lg mb-2">Climate Central</h3>
+                <p class="text-xs text-muted mb-6 flex-grow">Interactive reports on the thermal footprint of 150+ cities.</p>
+                <a href="https://www.climatecentral.org/climate-matters/urban-heat-islands" target="_blank" class="text-orange-500 font-bold text-sm hover:underline">View Data &rarr;</a>
+            </div>
+
+            <div class="research-card p-8 rounded-[2rem] flex flex-col cursor-search">
+                <div class="text-4xl mb-4">📋</div>
+                <h3 class="font-bold text-lg mb-2">EPA Strategies</h3>
+                <p class="text-xs text-muted mb-6 flex-grow">Official governmental guide on cooling urban environments.</p>
+                <a href="https://www.epa.gov/heatislands" target="_blank" class="text-orange-500 font-bold text-sm hover:underline">Mitigation Guide &rarr;</a>
+            </div>
+
+        </div>
+    </section>
+
+    <footer class="p-10 text-center text-muted text-[10px] font-mono tracking-widest uppercase border-t border-gray-500/10">
+        CA1 Project: CHE 110 Environmental Studies | Developed by Taskheer Kamal, Gilbert Ngambi, and Diswanth Reddy
+    </footer>
+
+    <script>
+        let locs = { u: {}, r: {} }, map = null, markers = [], charts = {};
+
+        // Theme Switcher
+        document.getElementById('themeToggle').onclick = () => {
+            const b = document.body;
+            const isD = b.getAttribute('data-theme') === 'dark';
+            b.setAttribute('data-theme', isD ? 'light' : 'dark');
+            document.getElementById('modeIcon').innerText = isD ? '☀️' : '🌙';
+            if (charts.cLine) renderDash();
+        };
+
+        // Autocomplete
+        function setAuto(id, drop, type) {
+            const i = document.getElementById(id), d = document.getElementById(drop);
+            i.oninput = async () => {
+                if (i.value.length < 3) return;
+                const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(i.value)}&count=5&format=json`);
+                const data = await r.json(); d.innerHTML = '';
+                if (data.results) {
+                    data.results.forEach(p => {
+                        const li = document.createElement('li');
+                        li.className = 'p-4 hover:bg-orange-600 hover:text-white transition-colors border-b border-white/5 cursor-action';
+                        li.innerHTML = `<span class="font-bold">${p.name}</span>, ${p.country}`;
+                        li.onclick = () => { i.value = p.name + ", " + p.country; locs[type] = { lat: p.latitude, lon: p.longitude, name: p.name }; d.classList.add('hidden'); };
+                        d.appendChild(li);
+                    });
+                    d.classList.remove('hidden');
+                }
+            };
+        }
+        setAuto('uIn', 'uDrop', 'u'); setAuto('rIn', 'rDrop', 'r');
+
+        // Form Submit
+        document.getElementById('compareForm').onsubmit = async (e) => {
+            e.preventDefault();
+            if(!locs.u.lat || !locs.r.lat) return alert("Please select both locations!");
+            const btn = document.getElementById('analyzeBtn');
+            btn.innerText = "Analyzing...";
+
+            const [uR, rR] = await Promise.all([
+                fetch(`https://api.open-meteo.com/v1/forecast?latitude=${locs.u.lat}&longitude=${locs.u.lon}&daily=temperature_2m_max&hourly=temperature_2m&timezone=auto`),
+                fetch(`https://api.open-meteo.com/v1/forecast?latitude=${locs.r.lat}&longitude=${locs.r.lon}&daily=temperature_2m_max&hourly=temperature_2m&timezone=auto`)
+            ]);
+            const [u, r] = await Promise.all([uR.json(), rR.json()]);
+            
+            locs.u.d = u.daily.temperature_2m_max; locs.u.h = u.hourly.temperature_2m.slice(0, 24);
+            locs.r.d = r.daily.temperature_2m_max; locs.r.h = r.hourly.temperature_2m.slice(0, 24);
+            locs.dates = u.daily.time;
+            
+            btn.innerText = "ANALYZE";
+            renderDash();
+        };
+
+        function renderDash() {
+            document.getElementById('dash').classList.remove('hidden');
+            const uA = locs.u.d.reduce((a,b)=>a+b)/7, rA = locs.r.d.reduce((a,b)=>a+b)/7, diff = (uA - rA).toFixed(1);
+            
+            // Behavioral Emojis
+            const emo = diff > 4 ? "🤬🥵🔥" : (diff > 2 ? "😰💦" : "😌🍃");
+            document.getElementById('status-emoji').innerText = emo;
+            document.getElementById('summary-text').innerHTML = `${locs.u.name} is <span class="text-orange-600 font-black">${Math.abs(diff)}°C ${diff > 0 ? 'hotter' : 'cooler'}</span> than rural ${locs.r.name}.`;
+            
+            document.getElementById('uAvg').innerText = uA.toFixed(1) + "°C";
+            document.getElementById('rAvg').innerText = rA.toFixed(1) + "°C";
+            document.getElementById('hDelta').innerText = `+${diff}°C`;
+
+            // Map Logic
+            if (!map) {
+                map = L.map('map', {zoomControl: false}).setView([locs.u.lat, locs.u.lon], 6);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            }
+            markers.forEach(m => map.removeLayer(m));
+            markers = [L.circleMarker([locs.u.lat, locs.u.lon], {color:'#ea580c', radius:15, fillOpacity:0.8}).addTo(map), L.circleMarker([locs.r.lat, locs.r.lon], {color:'#16a34a', radius:15, fillOpacity:0.8}).addTo(map)];
+            map.fitBounds(L.featureGroup(markers).getBounds(), {padding: [100, 100]});
+
+            // Chart Configuration
+            const txt = document.body.getAttribute('data-theme') === 'dark' ? '#9ca3af' : '#4b5563';
+            Chart.defaults.color = txt;
+            Object.values(charts).forEach(c => c.destroy());
+            
+            // 1. Line Trend
+            charts.cLine = new Chart(document.getElementById('cLine'), { type: 'line', data: { labels: locs.dates.map(d=>d.slice(5)), datasets: [{ label: 'Urban', data: locs.u.d, borderColor: '#ea580c', tension: 0.4 }, { label: 'Rural', data: locs.r.d, borderColor: '#16a34a', tension: 0.4 }] }, options: { responsive: true, maintainAspectRatio: false } });
+            
+            // 2. Hourly Diurnal
+            charts.cHour = new Chart(document.getElementById('cHour'), { type:'line', data:{ labels: Array.from({length:24},(_,i)=>i+":00"), datasets:[{label:'Urban', data:locs.u.h, borderColor:'#ea580c', fill:true, backgroundColor:'rgba(234,88,12,0.1)'}, {label:'Rural', data:locs.r.h, borderColor:'#16a34a', fill:true, backgroundColor:'rgba(22,163,74,0.1)'}] }, options:{responsive:true, maintainAspectRatio:false} });
+            
+            // 3. Penalty Bar
+            charts.cPenalty = new Chart(document.getElementById('cPenalty'), { type: 'bar', data: { labels: locs.dates.map(d=>d.slice(5)), datasets: [{ label: 'Heat Gap (°C)', data: locs.u.d.map((v,i)=>v-locs.r.d[i]), backgroundColor: '#ef4444', borderRadius: 8 }] }, options: { responsive: true, maintainAspectRatio: false } });
+            
+            // 4. Mean Bar
+            charts.cBar = new Chart(document.getElementById('cBar'), { type:'bar', data:{ labels:['Urban Average','Rural Average'], datasets:[{data:[uA.toFixed(1), rA.toFixed(1)], backgroundColor:['#ea580c','#16a34a'], borderRadius: 12}] }, options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}} });
+
+            document.getElementById('dash').scrollIntoView({behavior: 'smooth'});
+        }
+    </script>
+</body>
+</html>

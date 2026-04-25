@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urban Heat Island Analysis Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        body { background-color: #f7f3ee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        button, a { cursor: pointer; }
+        .leaflet-container { cursor: grab !important; }
+        .leaflet-dragging .leaflet-container { cursor: grabbing !important; }
+        .leaflet-interactive { cursor: pointer !important; }
+
+        .library-card { cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><text y="20" font-size="20">🔍</text></svg>'), pointer; }
+
+        .glass-card { 
+            background: rgba(255, 255, 255, 0.85); 
+            backdrop-filter: blur(10px); 
+            border: 1px solid rgba(255,255,255,0.3); 
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease;
+        }
+        .glass-card:hover { 
+            transform: translateY(-8px); 
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04); 
+        }
+
+        .planter { width: 200px; height: 80px; border-radius: 50%; display: flex; align-items: flex-end; justify-content: center; position: relative; margin: 0 auto; margin-top: 80px; transition: transform 0.3s ease; }
+        .planter:hover { transform: scale(1.05); }
+        .planter-urban { background: #6b7280; box-shadow: inset 0 10px 20px rgba(0,0,0,0.3), 0 15px 0 #4b5563; }
+        .planter-rural { background: #5d4037; box-shadow: inset 0 10px 20px rgba(0,0,0,0.3), 0 15px 0 #3e2723; }
+        
+        .svg-scene { position: absolute; bottom: 30px; width: 120px; height: 120px; animation: popIn 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        
+        .tree-sway { transform-origin: 50% 100%; animation: sway 4s ease-in-out infinite; }
+        @keyframes sway { 0%, 100% { transform: rotate(-2deg); } 50% { transform: rotate(3deg); } }
+
+        .heat-rise { animation: heatRise 2s linear infinite; transform-origin: center bottom; }
+        @keyframes heatRise { 0% { transform: translateY(0) scaleX(1); opacity: 0.8; } 50% { transform: translateY(-15px) scaleX(1.2); opacity: 0.4; } 100% { transform: translateY(-30px) scaleX(0.8); opacity: 0; } }
+
+        .window-glow { animation: flicker 3s infinite alternate; }
+        @keyframes flicker { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } 80% { opacity: 0.9; } }
+
+        @keyframes shimmer { 100% { transform: translateX(100%); } }
+
+        #map { height: 450px; border-radius: 1rem; z-index: 10; filter: contrast(1.1) saturate(1.3); }
+        #dashboard { display: none; }
+        
+        /* Custom scrollbar for the autocomplete dropdowns */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+    </style>
+</head>
+<body class="text-gray-800 pb-20 relative">
+
+    <a href="books.html" target="_blank" class="fixed top-6 right-6 z-50 group transition-transform duration-300 hover:scale-105">
+        <div class="relative bg-gradient-to-r from-green-800 to-green-600 rounded-2xl p-3 sm:p-4 shadow-2xl flex items-center gap-3 sm:gap-4 border border-green-400/50 overflow-hidden">
+            <div class="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent group-hover:animate-[shimmer_1.5s_infinite]"></div>
+            <div class="text-3xl sm:text-4xl">📚</div>
+            <div class="hidden sm:block pr-2">
+                <h3 class="text-white font-extrabold text-lg leading-tight shadow-sm">UHI Reading List</h3>
+                <p class="text-green-200 text-xs font-semibold tracking-wide uppercase mt-1">Top 12 Books ↗</p>
+            </div>
+        </div>
+    </a>
+
+    <div class="max-w-6xl mx-auto px-4 pt-16 text-center">
+        <h1 class="text-5xl font-extrabold text-gray-900 mb-4 transition duration-300 hover:text-red-600">The City is Burning.</h1>
+        <p class="text-xl text-gray-600 mb-12">Is your neighborhood suffering from the Urban Heat Island effect?</p>
+
+        <div class="flex flex-col md:flex-row justify-center gap-12 mb-12">
+            
+            <div class="text-center">
+                <h3 class="font-bold text-gray-500 mb-2">Urban Area</h3>
+                <div class="planter planter-urban">
+                    <svg class="svg-scene" viewBox="0 0 100 100">
+                        <defs>
+                            <linearGradient id="glassWall" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#334155"/>
+                                <stop offset="50%" stop-color="#475569"/>
+                                <stop offset="100%" stop-color="#1e293b"/>
+                            </linearGradient>
+                            <linearGradient id="neonGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#fcd34d"/>
+                                <stop offset="100%" stop-color="#f59e0b"/>
+                            </linearGradient>
+                        </defs>
+                        <path class="heat-rise" d="M 30,20 Q 35,5 30,-10" stroke="#ef4444" stroke-width="2" fill="none" opacity="0.6"/>
+                        <path class="heat-rise" d="M 70,30 Q 65,15 75,0" stroke="#f97316" stroke-width="2" fill="none" opacity="0.6" style="animation-delay: 1s;"/>
+                        <rect x="25" y="25" width="50" height="75" fill="url(#glassWall)" rx="2"/>
+                        <rect x="75" y="35" width="15" height="65" fill="#0f172a" rx="1"/>
+                        <rect class="window-glow" x="35" y="35" width="8" height="12" fill="url(#neonGlow)"/>
+                        <rect class="window-glow" x="55" y="35" width="8" height="12" fill="url(#neonGlow)" style="animation-delay: 0.5s;"/>
+                        <rect class="window-glow" x="35" y="55" width="8" height="12" fill="url(#neonGlow)" style="animation-delay: 1.2s;"/>
+                        <rect class="window-glow" x="55" y="55" width="8" height="12" fill="url(#neonGlow)" style="animation-delay: 0.8s;"/>
+                        <rect class="window-glow" x="45" y="75" width="8" height="12" fill="url(#neonGlow)"/>
+                    </svg>
+                </div>
+            </div>
+            
+            <div class="text-center">
+                <h3 class="font-bold text-gray-500 mb-2">Rural Area</h3>
+                <div class="planter planter-rural">
+                    <svg class="svg-scene tree-sway" viewBox="0 0 100 100">
+                        <defs>
+                            <radialGradient id="canopyVol" cx="35%" cy="30%" r="65%">
+                                <stop offset="0%" stop-color="#4ade80"/>
+                                <stop offset="60%" stop-color="#16a34a"/>
+                                <stop offset="100%" stop-color="#064e3b"/>
+                            </radialGradient>
+                            <linearGradient id="bark" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#451a03"/>
+                                <stop offset="40%" stop-color="#78350f"/>
+                                <stop offset="100%" stop-color="#290f02"/>
+                            </linearGradient>
+                        </defs>
+                        <rect x="42" y="45" width="16" height="55" fill="url(#bark)" rx="3"/>
+                        <path d="M 42,70 Q 30,90 35,100 L 65,100 Q 70,90 58,70 Z" fill="url(#bark)"/>
+                        <circle cx="50" cy="35" r="32" fill="url(#canopyVol)"/>
+                        <circle cx="28" cy="48" r="22" fill="url(#canopyVol)"/>
+                        <circle cx="72" cy="48" r="22" fill="url(#canopyVol)"/>
+                        <circle cx="50" cy="15" r="20" fill="url(#canopyVol)"/>
+                        <circle cx="35" cy="25" r="18" fill="url(#canopyVol)"/>
+                        <circle cx="65" cy="25" r="18" fill="url(#canopyVol)"/>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-card max-w-3xl mx-auto p-6 rounded-2xl shadow-lg relative z-20">
+            <form id="compareForm" class="flex flex-col md:flex-row gap-4">
+                
+                <div class="relative flex-1 text-left">
+                    <input type="text" id="urbanInput" autocomplete="off" placeholder="Enter City (e.g., Delhi)" class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-4 focus:ring-red-200 transition-all text-gray-800" required>
+                    <ul id="urbanDropdown" class="absolute z-50 w-full bg-white border border-gray-200 rounded-xl shadow-2xl hidden max-h-60 overflow-y-auto mt-2 custom-scrollbar divide-y divide-gray-100"></ul>
+                </div>
+
+                <div class="relative flex-1 text-left">
+                    <input type="text" id="ruralInput" autocomplete="off" placeholder="Enter Village (e.g., Manali)" class="w-full px-4 py-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-4 focus:ring-green-200 transition-all text-gray-800" required>
+                    <ul id="ruralDropdown" class="absolute z-50 w-full bg-white border border-gray-200 rounded-xl shadow-2xl hidden max-h-60 overflow-y-auto mt-2 custom-scrollbar divide-y divide-gray-100"></ul>
+                </div>
+
+                <button type="submit" class="bg-gray-900 text-white font-bold py-3 px-8 rounded-xl hover:bg-gray-700 hover:scale-105 transition-all w-full md:w-auto z-10 shrink-0">Compare Heat</button>
+            </form>
+            <p id="error-msg" class="text-red-500 mt-3 hidden font-semibold"></p>
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto px-4 mt-12">
+        <div id="map" class="shadow-2xl border-4 border-white transition-transform duration-500 hover:scale-[1.01]"></div>
+    </div>
+
+    <div id="dashboard" class="max-w-6xl mx-auto px-4 mt-16 animate-[popIn_0.5s_ease-out]">
+        <div class="text-center mb-10">
+            <h2 class="text-4xl font-extrabold mb-4">Analysis Results</h2>
+            <div id="diff-text" class="text-2xl font-medium bg-white/60 inline-block px-6 py-3 rounded-full shadow-sm border border-white"></div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div class="glass-card p-6 rounded-2xl shadow-lg">
+                <canvas id="lineChart"></canvas>
+            </div>
+            <div class="glass-card p-6 rounded-2xl shadow-lg">
+                <canvas id="barChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto px-4 mt-24 mb-12">
+        <h2 class="text-3xl font-bold mb-8 text-center">Deep Dive: Articles & Live Maps</h2>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div class="glass-card library-card p-6 rounded-2xl flex flex-col">
+                <div class="text-4xl mb-3">🌍</div>
+                <h3 class="font-bold text-lg mb-2">Live Global Heat Map</h3>
+                <p class="text-sm text-gray-600 mb-4 flex-grow">A mesmerizing, live interactive 3D globe showing real-time surface temperatures and weather patterns across the world.</p>
+                <a href="https://earth.nullschool.net/#current/wind/surface/level/overlay=temp/orthographic" target="_blank" rel="noopener noreferrer" class="text-green-600 font-bold hover:text-green-800 transition-colors">Explore Map &rarr;</a>
+            </div>
+
+            <div class="glass-card library-card p-6 rounded-2xl flex flex-col">
+                <div class="text-4xl mb-3">📊</div>
+                <h3 class="font-bold text-lg mb-2">Climate Central: UHI</h3>
+                <p class="text-sm text-gray-600 mb-4 flex-grow">Interactive research and reports calculating exactly how much the Urban Heat Island effect raises temperatures in specific cities.</p>
+                <a href="https://www.climatecentral.org/climate-matters/urban-heat-islands" target="_blank" rel="noopener noreferrer" class="text-green-600 font-bold hover:text-green-800 transition-colors">Read Research &rarr;</a>
+            </div>
+
+            <div class="glass-card library-card p-6 rounded-2xl flex flex-col">
+                <div class="text-4xl mb-3">🛰️</div>
+                <h3 class="font-bold text-lg mb-2">The Science of UHI</h3>
+                <p class="text-sm text-gray-600 mb-4 flex-grow">NASA Earth Observatory satellite data explaining exactly how concrete absorbs solar radiation compared to forests.</p>
+                <a href="https://earthobservatory.nasa.gov/features/UrbanHeat" target="_blank" rel="noopener noreferrer" class="text-blue-600 font-bold hover:text-blue-800 transition-colors">View Data &rarr;</a>
+            </div>
+
+            <div class="glass-card library-card p-6 rounded-2xl flex flex-col">
+                <div class="text-4xl mb-3">📋</div>
+                <h3 class="font-bold text-lg mb-2">Cooling Strategies</h3>
+                <p class="text-sm text-gray-600 mb-4 flex-grow">EPA governmental research guide on mitigation techniques like cool roofs, green roofs, and urban forestry.</p>
+                <a href="https://www.epa.gov/heatislands" target="_blank" rel="noopener noreferrer" class="text-blue-600 font-bold hover:text-blue-800 transition-colors">Read Guide &rarr;</a>
+            </div>
+        </div>
+    </div>
+
+    <footer class="py-8 border-t border-gray-300 text-center text-gray-500 text-sm bg-gray-100/50">
+        <p class="font-bold mb-1">CA1 Project: CHE 110 Environmental Studies.</p>
+        <p>Developed by Md Taskheer Kamal, Gilbert Chambo Ngambi, and Nallagatla Diswanth Reddy.</p>
+    </footer>
+
+    <script>
+        // --- NEW: Autocomplete Logic ---
+        function setupAutocomplete(inputId, dropdownId) {
+            const input = document.getElementById(inputId);
+            const dropdown = document.getElementById(dropdownId);
+            let timeout = null;
+
+            input.addEventListener('input', function() {
+                clearTimeout(timeout);
+                const query = this.value;
+
+                if (query.length < 3) {
+                    dropdown.classList.add('hidden');
+                    return;
+                }
+
+                // Debounce to prevent spamming the API
+                timeout = setTimeout(async () => {
+                    try {
+                        const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&format=json`);
+                        const data = await res.json();
+
+                        dropdown.innerHTML = '';
+                        if (data.results && data.results.length > 0) {
+                            data.results.forEach(place => {
+                                const li = document.createElement('li');
+                                li.className = 'px-4 py-3 hover:bg-gray-50 cursor-pointer text-sm transition-colors';
+                                
+                                // Format: City, State, Country
+                                const placeParts = [place.name, place.admin1, place.country].filter(Boolean);
+                                const fullName = placeParts.join(', ');
+                                
+                                li.innerHTML = `
+                                    <div class="font-bold text-gray-800">${place.name}</div>
+                                    <div class="text-xs text-gray-500 mt-0.5">${placeParts.slice(1).join(', ')}</div>
+                                `;
+                                
+                                li.addEventListener('click', () => {
+                                    input.value = fullName; 
+                                    dropdown.classList.add('hidden');
+                                });
+                                dropdown.appendChild(li);
+                            });
+                            dropdown.classList.remove('hidden');
+                        } else {
+                            dropdown.classList.add('hidden');
+                        }
+                    } catch (e) {
+                        console.error("Autocomplete error:", e);
+                    }
+                }, 300); // Waits 300ms before searching
+            });
+
+            // Close dropdown if user clicks outside
+            document.addEventListener('click', (e) => {
+                if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('hidden');
+                }
+            });
+        }
+
+        // Initialize Autocomplete for both boxes
+        setupAutocomplete('urbanInput', 'urbanDropdown');
+        setupAutocomplete('ruralInput', 'ruralDropdown');
+        // --------------------------------
+
+        // Standard App Logic
+        const map = L.map('map').setView([20.5937, 78.9629], 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap &copy; CARTO'
+        }).addTo(map);
+
+        let lineChartInstance = null;
+        let barChartInstance = null;
+        let markers = [];
+
+        document.getElementById('compareForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            const errorMsg = document.getElementById('error-msg');
+            btn.innerText = "Analyzing... ⏳";
+            errorMsg.classList.add('hidden');
+
+            const urbanInput = document.getElementById('urbanInput').value;
+            const ruralInput = document.getElementById('ruralInput').value;
+
+            try {
+                const response = await fetch('/api/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urban: urbanInput, rural: ruralInput })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    document.getElementById('dashboard').style.display = 'block';
+                    document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    updateUI(data);
+                } else {
+                    errorMsg.innerText = data.error;
+                    errorMsg.classList.remove('hidden');
+                }
+            } catch (err) {
+                errorMsg.innerText = "Server error. Is Python running?";
+                errorMsg.classList.remove('hidden');
+            }
+            btn.innerText = "Compare Heat";
+        });
+
+        function updateUI(data) {
+            document.getElementById('diff-text').innerHTML = `
+                <span style="color:${data.urban.status.color}">${data.urban.name}</span> ${data.urban.status.symbol} is 
+                <b>${data.difference}°C hotter</b> than <span style="color:${data.rural.status.color}">${data.rural.name}</span> ${data.rural.status.symbol}.
+            `;
+
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+            
+            const uPopup = `<b>${data.urban.name}</b><br><span style="font-size:24px">${data.urban.status.symbol}</span> ${data.urban.avg}°C`;
+            const rPopup = `<b>${data.rural.name}</b><br><span style="font-size:24px">${data.rural.status.symbol}</span> ${data.rural.avg}°C`;
+
+            const uMarker = L.circleMarker([data.urban.lat, data.urban.lon], { color: data.urban.status.color, radius: 18, fillOpacity: 0.7, weight: 3 }).bindPopup(uPopup).addTo(map);
+            const rMarker = L.circleMarker([data.rural.lat, data.rural.lon], { color: data.rural.status.color, radius: 18, fillOpacity: 0.7, weight: 3 }).bindPopup(rPopup).addTo(map);
+            
+            markers.push(uMarker, rMarker);
+            map.fitBounds(L.featureGroup(markers).getBounds(), { padding: [50, 50] });
+
+            drawCharts(data);
+        }
+
+        function drawCharts(data) {
+            const ctxLine = document.getElementById('lineChart').getContext('2d');
+            const ctxBar = document.getElementById('barChart').getContext('2d');
+
+            if(lineChartInstance) lineChartInstance.destroy();
+            if(barChartInstance) barChartInstance.destroy();
+
+            const labels = data.dates.map(d => d.substring(5));
+
+            lineChartInstance = new Chart(ctxLine, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: `${data.urban.name} (City)`, data: data.urban.temps, borderColor: data.urban.status.color, backgroundColor: data.urban.status.color + '33', fill: true, tension: 0.4, pointRadius: 5, pointHoverRadius: 8 },
+                        { label: `${data.rural.name} (Green)`, data: data.rural.temps, borderColor: data.rural.status.color, backgroundColor: data.rural.status.color + '33', fill: true, tension: 0.4, pointRadius: 5, pointHoverRadius: 8 }
+                    ]
+                },
+                options: { 
+                    plugins: { title: { display: true, text: '7-Day Temperature Trend', font: { size: 16 } } },
+                    interaction: { mode: 'index', intersect: false }
+                }
+            });
+
+            const uLabel = `${data.urban.name} ${data.urban.status.symbol}`;
+            const rLabel = `${data.rural.name} ${data.rural.status.symbol}`;
+
+            barChartInstance = new Chart(ctxBar, {
+                type: 'bar',
+                data: {
+                    labels: [uLabel, rLabel],
+                    datasets: [{
+                        label: 'Average Temperature (°C)',
+                        data: [data.urban.avg, data.rural.avg],
+                        backgroundColor: [data.urban.status.color, data.rural.status.color],
+                        borderRadius: 8,
+                        hoverBackgroundColor: [data.urban.status.color + 'dd', data.rural.status.color + 'dd']
+                    }]
+                },
+                options: { 
+                    plugins: { title: { display: true, text: 'Average Heat Comparison', font: { size: 16 } } },
+                    scales: { y: { beginAtZero: false, suggestedMin: Math.min(data.rural.avg, data.urban.avg) - 5 } }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
